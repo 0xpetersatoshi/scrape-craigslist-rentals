@@ -1,0 +1,16 @@
+beautifulsoup4==4.6.3
+boto3==1.9.9
+botocore==1.12.9
+bs4==0.0.1
+certifi==2018.8.24
+chardet==3.0.4
+docutils==0.14
+idna==2.7
+jmespath==0.9.3
+lxml==4.2.5
+numpy==1.15.1
+python-dateutil==2.7.3
+requests==2.19.1
+s3transfer==0.1.13
+six==1.11.0
+urllib3==1.23
