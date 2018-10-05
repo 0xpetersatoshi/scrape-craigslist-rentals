@@ -141,7 +141,7 @@ def scrape_rentals(neighborhood, url):
 
     return rental_info
 
-
+# this is a test
 # Create function to run scrape_rentals on all neighborhoods
 def get_rental_data(neighborhoods):
     """This function loops through all the items in neighborhood 
