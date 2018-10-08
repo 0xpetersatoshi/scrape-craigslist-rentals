@@ -13,42 +13,59 @@ date = datetime.strftime(dt, '%Y_%m_%d')
 
 # Set up S3 resource
 s3 = boto3.resource("s3")
-bucket = os.getenv("S3_BUCKET", "webscraping-data")
-filepath = os.getenv("S3_FILE_PATH", "craigslist-rental-data")
+
+# Define input and output buckets and file names
+input_bucket = os.getenv("S3_INPUT_BUCKET")
+input_folder_path = os.getenv("S3_INPUT_FOLDER_PATH")
+neighborhoods_file = os.getenv("NEIGHBORHOODS_FILENAME")
+input_obj_path = os.path.join(input_folder_path, neighborhoods_file)
+
+output_bucket = os.getenv("S3_OUTPUT_BUCKET")
+output_folder_path = os.getenv("S3_OUTPUT_FOLDER_PATH")
 filename = "rent_data_{}.json".format(date)
-obj_path = os.path.join(filepath, filename)
+ouput_obj_path = os.path.join(output_folder_path, filename)
 
-# Define neighborhoods and URLs
-hillcrest = 'https://sandiego.craigslist.org/search/apa?query=hillcrest&availabilityMode=0&sale_date=all+dates'
-north_park = 'https://sandiego.craigslist.org/search/apa?query=north+park&availabilityMode=0&sale_date=all+dates'
-south_park = 'https://sandiego.craigslist.org/search/apa?query=south+park&availabilityMode=0&sale_date=all+dates'
-mission_hills = 'https://sandiego.craigslist.org/search/apa?query=mission+hills&availabilityMode=0&sale_date=all+dates'
-golden_hill = 'https://sandiego.craigslist.org/search/apa?query=golden+hill&availabilityMode=0&sale_date=all+dates'
-little_italy = 'https://sandiego.craigslist.org/search/apa?query=little+italy&availabilityMode=0&sale_date=all+dates'
-east_village = 'https://sandiego.craigslist.org/search/apa?query=east+village&availabilityMode=0&sale_date=all+dates'
-normal_heights = 'https://sandiego.craigslist.org/search/apa?query=normal+heights&availabilityMode=0&sale_date=all+dates'
-university_heights = 'https://sandiego.craigslist.org/search/apa?query=university+heights&availabilityMode=0&sale_date=all+dates'
-kensington = 'https://sandiego.craigslist.org/search/apa?query=kensington&availabilityMode=0&sale_date=all+dates'
-bankers_hill = 'https://sandiego.craigslist.org/search/apa?query=bankers+hill&availabilityMode=0&sale_date=all+dates'
-
-# Create dictionary of neighborhoods and URLs
-neighborhoods = {
-    "Hillcrest": hillcrest,
-    "North Park": north_park,
-    "South Park": south_park,
-    "Mission Hills": mission_hills,
-    "Golden Hill": golden_hill,
-    "Little Italy": little_italy,
-    "East Village": east_village,
-    "Normal Heights": normal_heights,
-    "University Heights": university_heights,
-    "Kensington": kensington,
-    "Bankers Hill": bankers_hill,
-}
+default_url = "https://sandiego.craigslist.org/search/apa?query={}&availabilityMode=0&sale_date=all+dates"
+url = os.getenv("CRAIGSLIST_URL", default_url)
 
 # Define regex pattern to extract numeric information
 pattern = '([0-9]+)(ft2|br)'
 regex = re.compile(pattern)
+
+
+# Gets list of neighborhoods from s3
+def build_neighborhood_list():
+    """Pulls file from s3 containing the names of neighborhoods to be scraped.
+
+    Returns:
+        Returns a list of neighborhoods to scrape.
+    """
+
+    obj = s3.Object(input_bucket, input_obj_path)
+    contents = obj.get()['Body'].read().decode('utf-8')
+    neighborhood_list = contents.split("\n")
+
+    return neighborhood_list
+
+
+# Creates dictionary with url links
+def build_url_dic(neighborhood_list):
+    """Builds dictionary with neighborhood name as key and craigslist url as value which is passed into get_rental_data() function.
+
+    Args:
+        neighborhood_list: List of neighborhoods to scrape.
+
+    Returns:
+        Dictionary of neighborhoods and url links.
+    """
+
+    neighborhoods = {}
+    for neighborhood in neighborhood_list:
+        fmt = "+".join(neighborhood.split()).lower()
+        link = url.format(fmt)
+        neighborhoods[neighborhood] = link
+
+    return neighborhoods
 
 
 # Create function to run scrape_rentals on all neighborhoods
@@ -58,8 +75,6 @@ def get_rental_data(neighborhoods):
     and uploads a json to s3.
 
     Args:
-        event: An AWS Lambda event type that is passed to the handler.
-        context: AWS runtime information passed to the handler.
         neighborhoods: neighborhoods is a dictionary containing 
             the names of the neighborhoods as keys and the craigslist URLs as values.
     """
@@ -128,18 +143,28 @@ def get_rental_data(neighborhoods):
                 continue
 
     # Load rental data to s3
-    # obj = s3.Object(bucket, filename)
-    # obj.put(Body=json.dumps(rental_data, separators=(',', ':')))
-    with open("../../../Desktop/{}".format(filename), "w") as outfile:
-        json.dump(rental_data, outfile, indent=4)
+    obj = s3.Object(output_bucket, ouput_obj_path)
+    obj.put(Body=json.dumps(rental_data, separators=(',', ':')))
 
 
+# Handler function
 def main(event, context):
+    """Lambda handler function that runs all the functions to scrape data.
+
+    Args:
+        event: An AWS Lambda event type that is passed to the handler.
+        context: AWS runtime information passed to the handler.
+    """
+
+    neighborhood_list = build_neighborhood_list()
+    neighborhoods = build_url_dic(neighborhood_list)
     get_rental_data(neighborhoods)
 
 
 if __name__ == '__main__':
+
+    # For testing locally
     print("Scrapping Craigslist...")
     main("", "")
 
-    print("Uploaded to:", os.path.join(bucket, obj_path))
+    print("Uploaded:", os.path.join(output_bucket, ouput_obj_path))
