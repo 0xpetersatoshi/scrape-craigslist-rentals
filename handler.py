@@ -1,4 +1,5 @@
 import re
+import os
 import json
 import requests
 import boto3
@@ -12,8 +13,10 @@ date = datetime.strftime(dt, '%Y_%m_%d')
 
 # Set up S3 resource
 s3 = boto3.resource("s3")
-bucket = "webscraping-data"
-obj_path = "craigslist-rental-data/rent_data_" + date + ".json"
+bucket = os.getenv("S3_BUCKET", "webscraping-data")
+filepath = os.getenv("S3_FILE_PATH", "craigslist-rental-data")
+filename = "rent_data_{}.json".format(date)
+obj_path = os.path.join(filepath, filename)
 
 # Define neighborhoods and URLs
 hillcrest = 'https://sandiego.craigslist.org/search/apa?query=hillcrest&availabilityMode=0&sale_date=all+dates'
@@ -48,104 +51,11 @@ pattern = '([0-9]+)(ft2|br)'
 regex = re.compile(pattern)
 
 
-# Function to scrape data from Craigslist
-def scrape_rentals(neighborhood, url):
-    """Returns json of housing data from Craigslist.
-
-    Args:
-        neighborhood: The neighborhood name to search on craigslist.abs
-        url: The url of the neighborhood to search for.
-
-    Returns:
-        A json object containing title, price, bedroom count, sqft, and posting link.
-    """
-
-    # Create empty lists to hold rental information
-    rental_info = []
-    prices = []
-    bedrooms = []
-    square_feet = []
-
-    # Retrieve page with the requests module
-    response = requests.get(url)
-
-    # Create BeautifulSoup object; parse with 'lxml'
-    soup = BeautifulSoup(response.text, 'lxml')
-
-    # results are returned as an iterable list
-    results = soup.find_all('li', class_="result-row")
-
-    # Print out number of results
-    print("Found {} results.".format(len(results)))
-
-    # Loop through returned results
-    for result in results:
-        # Error handling
-        try:
-            # Identify and return bedrooms and footage
-            raw_br = result.find(
-                'span', class_="housing").text.split("-")[0].strip()
-            if regex.search(raw_br):
-                bdrms = float(regex.search(raw_br).group(1))
-            else:
-                continue
-
-            raw_sqft = result.find(
-                'span', class_="housing").text.split("-")[1].strip()
-            if regex.search(raw_sqft):
-                sqft = float(regex.search(raw_sqft).group(1))
-            else:
-                continue
-
-            # Get datetime of post
-            datetime = result.find("time")["datetime"]
-
-            # Identify and return title of listing
-            title = result.find('a', class_="result-title").text
-
-            # Identify and return price of listing
-            price = float(result.a.span.text.strip("$"))
-
-            # Identify and return link to listing
-            link = result.a['href']
-
-            # Create dictionary for result
-            data = {
-                "datetime": datetime,
-                "title": title,
-                "price": price,
-                "bedrooms": bdrms,
-                "sqft": sqft,
-                "link": link
-            }
-
-            # Append data to list
-            rental_info.append(data)
-
-            # Lists to calculate some basic metrics
-            prices.append(price)
-            bedrooms.append(bdrms)
-            square_feet.append(sqft)
-
-        except:
-            continue
-
-    # Print for logging purposes
-    print("Median Price for {}: ${:,.2f}".format(
-        neighborhood, np.median(prices)))
-    print("Median Bedrooms for {}: {:.0f} br".format(
-        neighborhood, np.median(bedrooms)))
-    print("Median Square Footage for {}: {} ft2".format(
-        neighborhood, np.median(square_feet)))
-    print("-" * 80)
-
-    return rental_info
-
-# this is a test
 # Create function to run scrape_rentals on all neighborhoods
 def get_rental_data(neighborhoods):
-    """This function loops through all the items in neighborhood 
-    and runs the scrape_rentals function on them and uploads a json to s3.
+    """This function loops through all the items in neighborhoods,
+    scrapes craiglist for date for that neighborhood, appends it to a list, 
+    and uploads a json to s3.
 
     Args:
         event: An AWS Lambda event type that is passed to the handler.
@@ -160,21 +70,68 @@ def get_rental_data(neighborhoods):
     # Loop through neighborhoods dict
     for neighborhood, url in neighborhoods.items():
 
-        # Scrape neighborhood from craigslist
-        scraped_data = scrape_rentals(neighborhood, url)
+        # Retrieve page with the requests module
+        response = requests.get(url)
 
-        # Create dict with neighborhood name
-        neighborhood_data = {
-            "neighborhood": neighborhood,
-            "data": scraped_data,
-        }
+        # Create BeautifulSoup object; parse with 'lxml'
+        soup = BeautifulSoup(response.text, 'lxml')
 
-        # Add scraped data to rental_data
-        rental_data.append(neighborhood_data)
+        # results are returned as an iterable list
+        results = soup.find_all('li', class_="result-row")
+
+        # Loop through returned results
+        for result in results:
+            # Error handling
+            try:
+                # Identify and return bedrooms and footage
+                raw_br = result.find(
+                    'span', class_="housing").text.split("-")[0].strip()
+                if regex.search(raw_br):
+                    bedrooms = float(regex.search(raw_br).group(1))
+                else:
+                    continue
+
+                raw_sqft = result.find(
+                    'span', class_="housing").text.split("-")[1].strip()
+                if regex.search(raw_sqft):
+                    sqft = float(regex.search(raw_sqft).group(1))
+                else:
+                    continue
+
+                # Get datetime of post
+                datetime = result.find("time")["datetime"]
+
+                # Identify and return title of listing
+                title = result.find('a', class_="result-title").text
+
+                # Identify and return price of listing
+                price = float(result.a.span.text.strip("$"))
+
+                # Identify and return link to listing
+                link = result.a['href']
+
+                # Create dictionary for result
+                data = {
+                    "neighborhood": neighborhood,
+                    "datetime": datetime,
+                    "title": title,
+                    "price": price,
+                    "bedrooms": bedrooms,
+                    "sqft": sqft,
+                    "link": link
+                }
+
+                # Append data to list
+                rental_data.append(data)
+
+            except:
+                continue
 
     # Load rental data to s3
-    obj = s3.Object(bucket, obj_path)
-    obj.put(Body=json.dumps(rental_data, indent=4))
+    # obj = s3.Object(bucket, filename)
+    # obj.put(Body=json.dumps(rental_data, separators=(',', ':')))
+    with open("../../../Desktop/{}".format(filename), "w") as outfile:
+        json.dump(rental_data, outfile, indent=4)
 
 
 def main(event, context):
@@ -185,4 +142,4 @@ if __name__ == '__main__':
     print("Scrapping Craigslist...")
     main("", "")
 
-    print("Uploaded to:", bucket + "/" + obj_path)
+    print("Uploaded to:", os.path.join(bucket, obj_path))
